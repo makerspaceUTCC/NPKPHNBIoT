@@ -1,0 +1,537 @@
+//NB IoT with Mrdian filter and utcc makerspace server
+#include <TinyGPSPlus.h>
+#include <SoftwareSerial.h>
+#include "AIS_SIM7020E_API.h"
+#include "ClosedCube_HDC1080.h"
+#include <Wire.h>
+#include "crc16.h"
+#include <U8g2lib.h>
+
+U8G2_SSD1327_MIDAS_128X128_F_HW_I2C u8g2( // note "F_HW" version gave best results
+/* No Rotation*/U8G2_R0,
+/* reset=/ U8X8_PIN_NONE,
+/ clock=/ 25, // use NON-adefault I2C pins for NodeMCU-32S
+/ data=*/ 26); // data pin
+
+bool LCD = true;  //show LCD
+
+//static const int RXPin = 3, TXPin = 1;
+static const int RXPin = 15, TXPin = 2;
+static const uint32_t GPSBaud = 9600;
+
+// The TinyGPSPlus object
+TinyGPSPlus gps;
+
+// The serial connection to the GPS device
+SoftwareSerial ss(RXPin, TXPin);
+SoftwareSerial SoilSerial(32,33);   // (RX,TX)
+ClosedCube_HDC1080 hdc1080;
+
+const int lightSensorPin=34; 
+
+AIS_SIM7020E_API nb;
+
+#define MQTT_SERVER   "xxxxxx" 
+#define MQTT_PORT     "xxxxx"
+#define StrSID        "''"
+#define MQTT_USERNAME "xxxxxxx"
+#define MQTT_PASSWORD "xxxxxxxx"
+#define MQTT_NAME     ""
+
+#define sensor_id0  "RiceSoilN04"
+#define sensor_id1  "RiceSoilP04"
+#define sensor_id2  "RiceSoilK04"
+#define sensor_id3  "RiceSoilT04"
+#define sensor_id4  "RiceSoilH04"
+#define sensor_id5  "RiceSoilEC04"
+#define sensor_id6  "RiceSoilpH04"
+#define sensor_id7  "RiceGPS04"
+#define sensor_id8  "RiceSoilNF04"
+#define sensor_id9  "RiceSoilPF04"
+#define sensor_id10  "RiceSoilKF04"
+#define sensor_id11  "RiceSoilTF04"
+#define sensor_id12  "RiceSoilHF04"
+#define sensor_id13  "RiceSoilECF04"
+#define sensor_id14  "RiceSoilpHF04"
+
+unsigned long Timer1 =millis();
+unsigned long Timer2 =millis();
+unsigned long Timer3 =millis();
+unsigned long Timer4 =millis();
+
+#define buff_size 21  // Must be an odd number.  Should be greater than 5.  7 works well.
+
+unsigned long a_second = 1000;
+float Soil_Hum = 0.0;  //Stores humidity value
+float Soil_Temp = 0.0;  //Stores temperature value
+float Soil_EC = 0.0;  //Stores temperature value
+float Soil_pH = 0.0;  //Stores humidity value
+float Soil_N = 0.0;  //Stores temperature value
+float Soil_P = 0.0;  //Stores temperature value
+float Soil_K = 0.0;  //Stores humidity value
+
+float Soil_Hum_array[buff_size] = {0.0};
+float Soil_Temp_array[buff_size] = {0.0};
+float Soil_EC_array[buff_size] = {0.0};
+float Soil_pH_array[buff_size] = {0.0};
+float Soil_N_array[buff_size] = {0.0};
+float Soil_P_array[buff_size] = {0.0};
+float Soil_K_array[buff_size] = {0.0};
+
+float Soil_Hum_array_sort[buff_size] = {0.0};
+float Soil_Temp_array_sort[buff_size] = {0.0};
+float Soil_EC_array_sort[buff_size] = {0.0};
+float Soil_pH_array_sort[buff_size] = {0.0};
+float Soil_N_array_sort[buff_size] = {0.0};
+float Soil_P_array_sort[buff_size] = {0.0};
+float Soil_K_array_sort[buff_size] = {0.0};
+//String string_Temp, string_Humid, temporary_string, tick_string;
+
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+}
+
+byte Adrr=0x01, Fcode=0x03;
+
+byte values[11];
+int regval[2];
+
+u8g2_uint_t u8g2_draw_unifont_Thai(u8g2_uint_t x, u8g2_uint_t y, const char *str)
+{
+  uint16_t e;
+  u8g2_uint_t delta, sum;
+  u8g2.getU8g2()->u8x8.next_cb = u8x8_utf8_next;
+  u8x8_utf8_init(u8g2.getU8x8());
+  sum = 0;
+  for(;;)
+  {
+    e = u8g2.getU8g2()->u8x8.next_cb(u8g2.getU8x8(), (uint8_t)*str);
+    if ( e == 0x0ffff )
+      break;
+    str++;
+    if ( e != 0x0fffe )
+    {
+      
+      switch(e)
+      {
+  /* many more glyphs and corrections are missing */
+  /* please report to https://github.com/olikraus/u8g2/issues/584 */
+  /* แปลงอักษรไทยให้อยู่ในรูป Hex ที่ https://r12a.github.io/app-conversion/ */
+  /*  ธ-0E18        า-0E32        
+      ต-0E15        ุ-0E38
+      อ-0E2D        ห-0E2B 
+      ร-0E23        ใ-0E43
+      น-0E19        ด-0E14
+      ิ-0E34        น-0E19    */
+  /*ใส่ชุดขยับสระและวรรณยุกต์และตัวอักษร*/
+  //case 0x0E18: x-= 3;break;//ธ
+  case 0x0E32: x-= 5; break;//า
+  //case 0x0E15: x-= 3; break;//ต
+  case 0x0E38: x-= 14; break;//ุ
+  case 0x0E2D: x-= 3; break;//อ
+  //case 0x0E2B: x-= 2; break;//ห
+  //case 0x0E23: x-= 3; break;
+  //case 0x0E43: x-= 3; break;
+  //case 0x0E19: x-= 3; break;
+  case 0x0E14: x-= 3; break;
+  case 0x0E34: x-= 14; break;
+  case 0x0E19: x-= 3; break;
+  //case 0x0E19: x-= 3; break;
+
+      }
+      delta = u8g2.drawGlyph(x, y, e);    
+      switch(e)
+      {
+   /*การขยับตัวอักษรในกรณีที่ซ้ำกับด้านบน*/
+  case 0x0E32: x-= 3; break;//า
+  //case 0x0E19: x-= 3; break;// น ทำซ้ำกับด้านบนไม่ได้
+  
+      }
+      x += delta;
+      sum += delta;    
+    }
+  }
+  return sum;
+}
+
+///------------------------------------------///
+void Task1(void *p){
+  while(1) {
+    //SendTHL(float Soil_Hum,float Soil_Temp,float Soil_EC,float Soil_pH,float Soil_N,float Soil_P,float Soil_K);
+  vTaskDelay(5000 / portTICK_PERIOD_MS);}
+}
+
+void Task2(void *p){
+  while(1) {
+     GPS_call();//GPS don't need time delay
+    vTaskDelay(30 / portTICK_PERIOD_MS); }
+}
+void Task3(void *p){
+  while(1) {
+     GPS_display();  
+    vTaskDelay(12000 / portTICK_PERIOD_MS); }
+}
+
+void Task4(void *p){
+  while(1) {
+     ReadSensor();
+    vTaskDelay(100 / portTICK_PERIOD_MS); }
+}
+
+void setup() {
+  Serial.begin(9600);
+    while (!Serial);
+  ss.begin(GPSBaud);
+  SoilSerial.begin(4800);
+  u8g2.begin();
+  u8g2.setBusClock(10000000); // seems to work reliably, and very fast
+
+  //Serial.println("ClosedCube HDC1080");
+
+  nb.begin();           //Init Magellan LIB
+  while (nb.connectMQTT(MQTT_SERVER,MQTT_PORT,StrSID,MQTT_USERNAME,MQTT_PASSWORD)==false)
+  {
+    Serial.print(". ");
+    delay(100);
+  }
+  Serial.println("MQ connectec ");
+  hdc1080.begin(0x40);
+   
+  Serial.print("Manufacturer ID=0x");
+  Serial.println(hdc1080.readManufacturerId(), HEX); // 0x5449 ID of Texas Instruments
+  Serial.print("Device ID=0x");
+  Serial.println(hdc1080.readDeviceId(), HEX);       // 0x1050 ID of the device
+  //xTaskCreate(&Task1, "Task1", 10240, NULL, 0, NULL);
+  //xTaskCreate(&Task2, "Task2", 100000, NULL, 10, NULL);
+  //xTaskCreate(&Task3, "Task3", 4096, NULL, 2, NULL);
+  //xTaskCreate(&Task4, "Task4", 10240, NULL, 1, NULL);
+  //xTaskCreatePinnedToCore(&Task3,"Task3",4096,NULL,2,NULL,0);  
+}
+float Mois=0,Temp=0,EC=0,pH=0,N,P,K;
+void loop() 
+{
+   /*if(millis()-Timer1 >= 5000){
+     Timer1 =millis();    
+     SendTHL();//GPS don't need time delay
+  }
+*/
+  
+   if(millis()-Timer2 >= 30){
+     Timer2 =millis();    
+     GPS_call();//GPS don't need time delay
+  }
+     if(millis()-Timer3 >= 13000){
+     Timer3 =millis();
+     GPS_display();    
+  } 
+    if(millis()-Timer1 >= 5000){
+     Timer1 =millis();
+     ReadSensor();    
+  }
+    if(millis()-Timer4 >= 60000){
+     Timer4 =millis();
+     Median_Filter();    
+  }
+}
+
+unsigned int modRead(byte reg){
+
+  byte RegisterH=0x00,RegisterL=reg, len =0x01;
+  byte x[6] = { Adrr, Fcode,RegisterH,RegisterL,0x00,len};
+  uint16_t u16CRC=0xffff;
+  for (int i = 0; i < 6; i++)
+    {
+        u16CRC = crc16_update(u16CRC, x[i]);
+
+    }   //Serial.print(lowByte(u16CRC),HEX); Serial.print(",");
+        //Serial.println(highByte(u16CRC),HEX);
+  byte request[8] = { Adrr, Fcode,RegisterH,RegisterL,0x00,len, lowByte(u16CRC),highByte(u16CRC)};
+  
+  //digitalWrite(EnTxPin, HIGH); digitalWrite(EnRxPin, HIGH); 
+  //delay(50);
+  if(SoilSerial.write(request,sizeof(request))==8){
+     //digitalWrite(EnTxPin, LOW); digitalWrite(EnRxPin, LOW); 
+     delay(50);
+     for(byte i=0;i<7;i++){
+        
+        values[i] = SoilSerial.read();
+       // Serial.print(" 0x");
+       // Serial.print(values[i],HEX);
+        
+     }
+     //Serial.println("");
+     //Serial.flush();
+  }
+   unsigned int val = (values[3]<<8)| values[4];
+     
+   //Serial.print(val);
+  return val;
+}
+
+void GPS_call(void){
+    while (ss.available() > 0)
+    if (gps.encode(ss.read()))
+      displayInfo();
+  if (millis() > 5000 && gps.charsProcessed() < 10)
+  {
+    Serial.println(F("No GPS detected: check wiring."));
+    while(true);
+  }
+}
+
+void displayInfo()
+{
+
+  if (gps.location.isValid())
+  {
+  }
+  else
+  {
+    Serial.println(F("INVALID"));
+  }
+  if (gps.date.isValid())
+  {
+  }
+  else
+  {
+    Serial.println(F("INVALID"));
+  }
+  if (gps.time.isValid())
+  {
+  }
+  else
+  {
+    Serial.println(F("INVALID"));
+  }
+}
+
+void GPS_display(void){
+  float GPS_lat,GPS_lng=0;
+  GPS_lat=gps.location.lat();
+  GPS_lng=gps.location.lng();
+  String remark="'GPS_Test'";
+    Serial.print("\n Publish message: ");
+    char sql[256];
+    sprintf(sql, "insert into Location(sensor_id, lat, lon, remark) values(\'%s\',%10.6f,%10.6f,\'%s\')"
+    ,sensor_id7,GPS_lat,GPS_lng,"GPS Location Test");  
+    if (nb.publish("xxxxxxx",sql) == true) { 
+      Serial.print("Success sending: ");
+      Serial.println(sql);
+    } else {
+      Serial.println("Fail sending");
+    }
+}
+
+void ReadSensor(void){
+  float Soil_N,Soil_P,Soil_K,Soil_pH,Soil_EC,Soil_Temp,Soil_Hum=0;
+  Soil_Hum= modRead(0x00);//moise(%);  0x00 Green 
+  delay(10);
+  Soil_Temp = modRead(0x01);//Temperature(C);  0x01 Green 
+  delay(10);
+  Soil_EC = modRead(0x02);//Conductivity(EC-us/cm); 0x02 Green 
+  delay(10);
+  Soil_pH = modRead(0x03);//pH;  0x03 green 
+  delay(10);
+  Soil_N = modRead(0x04);//Nitrogen(N-ppm); 0x04 Green //0x1e Blue
+  delay(10);
+  Soil_P = modRead(0x05); //Phosphorus(P-ppm); 0x05 Green //0x1f blue
+  delay(10);
+  Soil_K = modRead(0x06); //Potassium(K-ppm); 0x06 Green //0x20 blue
+  delay(10);
+  Monitoring(Soil_Hum,Soil_Temp,Soil_EC,Soil_pH,Soil_N, Soil_P,Soil_K);
+  SendTHL(Soil_Hum,Soil_Temp,Soil_EC,Soil_pH,Soil_N, Soil_P,Soil_K); 
+}
+
+void SendTHL(float Soil_Hum,float Soil_Temp,float Soil_EC,float Soil_pH,float Soil_N,float Soil_P,float Soil_K)
+{
+    Serial.print("\n Publish message: ");
+    char sql[256];
+    snprintf(sql, sizeof sql, "insert into SensorData(sensor_id, value) values(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f)"
+,sensor_id0,Soil_N,sensor_id1,Soil_P,sensor_id2,Soil_K,sensor_id3,Soil_Temp*0.1,sensor_id4,Soil_Hum*0.1,sensor_id5,Soil_EC,sensor_id6,Soil_pH*0.1);
+    if (nb.publish( "xxxxxx",sql) == true) { 
+      Serial.print("Success sending: ");
+      Serial.println(sql);
+    } else {
+      Serial.println("Fail sending");
+    }
+    delay(60000);
+}
+
+void Monitoring(float Soil_Hum,float Soil_Temp,float Soil_EC,float Soil_pH,float Soil_N,float Soil_P,float Soil_K)
+{
+    u8g2.firstPage(); 
+    do {
+  if (LCD==true){
+  u8g2.setFont(u8g2_font_etl24thai_t);
+  
+  /* Important: do not write background pixel */
+  u8g2.setFontMode(1);
+
+
+    u8g2.clearBuffer();
+    u8g2_draw_unifont_Thai(3,18,"ธาตุอาหารดิน");  // Hello World
+    u8g2.drawLine(0, 26, 127, 26); /*  - bottom*/
+
+    u8g2.setFont(u8g2_font_courR10_tr);
+    u8g2.setFontDirection(0);
+    u8g2.setCursor(0,39);
+    u8g2.print("N :");
+    u8g2.setCursor(30, 39);
+    u8g2.print(Soil_N,0);
+
+    u8g2.setFont(u8g2_font_courR10_tr);
+    u8g2.setFontDirection(0);
+    u8g2.setCursor(0, 52);
+    u8g2.print("P :");
+    u8g2.setFontDirection(0);
+    u8g2.setCursor(30, 52);
+    u8g2.print(Soil_P,0);
+
+    u8g2.setFont(u8g2_font_courR10_tr);
+    u8g2.setFontDirection(0);
+    u8g2.setCursor(0, 66);
+    u8g2.print("K :");
+    u8g2.setCursor(30,66);
+    u8g2.print(Soil_K,0);
+
+    u8g2.setFont(u8g2_font_courR10_tr);
+    u8g2.setFontDirection(0);
+    u8g2.setCursor(0, 78);
+    u8g2.print("pH:");
+    u8g2.setCursor(30, 78);
+    u8g2.print(Soil_pH*0.1);
+
+    u8g2.setFont(u8g2_font_courR10_tr);
+    u8g2.setFontDirection(0);
+    u8g2.setCursor(0, 91);
+    u8g2.print("H :");
+    u8g2.setCursor(30, 91);
+    u8g2.print(Soil_Hum*0.1);
+
+  u8g2.setFont(u8g2_font_courR10_tr);
+  u8g2.setFontDirection(0);
+  u8g2.setCursor(0, 102);
+  u8g2.print("T :");
+  u8g2.setCursor(30, 102);
+  u8g2.print(Soil_Temp*0.1);
+
+  u8g2.setFont(u8g2_font_courR10_tr);
+  u8g2.setFontDirection(0);
+  u8g2.setCursor(0, 116);
+  u8g2.print("EC:");
+  u8g2.setCursor(30, 116);
+  u8g2.print(Soil_EC*0.001);
+  u8g2.sendBuffer();
+  }
+  delay(5000);
+  } while( u8g2.nextPage() );
+ }
+
+
+
+void bubble_sort(float sort_array[], int n)
+  {
+  int i, j;
+  float  temp;
+ 
+  for (i = 0 ; i < n - 1; i++)
+    {
+      for (j = 0 ; j < n - i - 1; j++)
+        {
+          if (sort_array[j] > sort_array[j+1])
+            {
+            // Swap values 
+            temp            = sort_array[j];
+            sort_array[j]   = sort_array[j+1];
+            sort_array[j+1] = temp;
+            }
+          }
+      }
+  }
+
+
+void Median_Filter()
+{
+      int i, median_index;
+    
+  float Soil_N,Soil_P,Soil_K,Soil_pH,Soil_EC,Soil_Temp,Soil_Hum=0;
+  Soil_Hum= modRead(0x00);//moise(%);  0x00 Green 
+  delay(10);
+  Soil_Temp = modRead(0x01);//Temperature(C);  0x01 Green 
+  delay(10);
+  Soil_EC = modRead(0x02);//Conductivity(EC-us/cm); 0x02 Green 
+  delay(10);
+  Soil_pH = modRead(0x03);//pH;  0x03 green 
+  delay(10);
+  Soil_N = modRead(0x04);//Nitrogen(N-ppm); 0x04 Green //0x1e Blue
+  delay(10);
+  Soil_P = modRead(0x05); //Phosphorus(P-ppm); 0x05 Green //0x1f blue
+  delay(10);
+  Soil_K = modRead(0x06); //Potassium(K-ppm); 0x06 Green //0x20 blue
+  delay(10);
+
+    // Replace the oldest value with the newest just read by moving every element in 
+    // the arrays up one and sticking this new value in the bottom.
+    for (i = 0 ; i < buff_size - 1 ; i++)
+      {   
+        Soil_Hum_array[i] = Soil_Hum_array[i + 1];
+        Soil_Temp_array[i] = Soil_Temp_array[i + 1];
+        Soil_EC_array[i] = Soil_EC_array[i + 1];
+        Soil_pH_array[i] = Soil_pH_array[i + 1];
+        Soil_N_array[i] = Soil_N_array[i + 1];
+        Soil_P_array[i] = Soil_P_array[i + 1];
+        Soil_K_array[i] = Soil_K_array[i + 1];    
+      }
+    Soil_Hum_array[buff_size-1] = Soil_Hum;
+    Soil_Temp_array[buff_size-1] = Soil_Temp;
+    Soil_EC_array[buff_size-1] = Soil_EC;
+    Soil_pH_array[buff_size-1] = Soil_pH;
+    Soil_N_array[buff_size-1] = Soil_N;
+    Soil_P_array[buff_size-1] = Soil_P;
+    Soil_K_array[buff_size-1] = Soil_K;    
+    // Move them into the sort arrays
+    for (i = 0 ; i < buff_size ; i++)
+      {    
+        Soil_Hum_array_sort[i] = Soil_Hum_array[i];
+        Soil_Temp_array_sort[i] = Soil_Temp_array[i];
+        Soil_EC_array_sort[i] = Soil_EC_array[i];
+        Soil_pH_array_sort[i] = Soil_pH_array[i];
+        Soil_N_array_sort[i] = Soil_N_array[i];
+        Soil_P_array_sort[i] = Soil_P_array[i];
+        Soil_K_array_sort[i] = Soil_K_array[i];
+      }
+
+    // Sort them. Use quick and dirty bubble sort because it's a small number of data points
+    bubble_sort(Soil_Hum_array_sort, buff_size);
+    bubble_sort(Soil_Temp_array_sort, buff_size);
+    bubble_sort(Soil_EC_array_sort, buff_size);
+    bubble_sort(Soil_pH_array_sort, buff_size);
+    bubble_sort(Soil_N_array_sort, buff_size);
+    bubble_sort(Soil_P_array_sort, buff_size);
+    bubble_sort(Soil_K_array_sort, buff_size);
+    // Use the median of the last "buff_zize" readings for the display
+    median_index = buff_size / 2;
+    Soil_Hum = Soil_Hum_array_sort[median_index]; 
+    Soil_Temp = Soil_Temp_array_sort[median_index];
+    Soil_EC = Soil_EC_array_sort[median_index];
+    Soil_pH = Soil_pH_array_sort[median_index]; 
+    Soil_N = Soil_N_array_sort[median_index];
+    Soil_P = Soil_P_array_sort[median_index];
+    Soil_K = Soil_K_array_sort[median_index];    
+    Serial.print("\n Publish message: ");
+    char sql[256];
+    snprintf(sql, sizeof sql, "insert into SensorData(sensor_id, value) values(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f),(\'%s\',%f)"
+,sensor_id8,Soil_N,sensor_id9,Soil_P,sensor_id10,Soil_K,sensor_id11,Soil_Temp*0.1,sensor_id12,Soil_Hum*0.1,sensor_id13,Soil_EC,sensor_id14,Soil_pH*0.1);
+    if (nb.publish( "xxxxxxxx",sql) == true) { 
+      Serial.print("Success sending: ");
+      Serial.println(sql);
+    } else {
+      Serial.println("Fail sending");
+    }
+}
